@@ -1,0 +1,448 @@
+---
+title: "Accessing Racial Mortality Rate Changes During and Before Pandemic: The Interplay of Racial Inequality with Income and The Essential Role of Health Insurance"
+title-block-banner: true
+date: "today"
+date-format: "long"
+format: pdf
+number-sections: true
+bibliography: references.bib
+---
+
+```{r}
+#| include: false
+#| warning: false
+#| message: false
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(tools)
+library(ggplot2)
+library(maps)
+library(mapdata)
+library(gridExtra)
+library(broom)
+library(kableExtra)
+```
+
+```{r}
+#| echo: false
+#| message: false
+county_data <- read.csv("merged_data_county.csv")
+```
+
+# Introduction
+
+During the pandemic, approximately 0.7 million White Americans and 0.15 million Black Americans lost their lives. However, the mortality rate for Black Americans was about 1.4 times higher than that for White Americans. Considering the historically higher mortality rates among Black Americans with the intensified trend over the past decade [@Caraballo2023], it's challenging to determine the racial disparities in mortality during the pandemic. This paper aims to examine the variations of mortality among the two race during and before the pandemic, analyzing the racial mortality inequality caused by the pandemic. This paper also seeks to find the factors contributing to the change in inequality.
+
+There is plenty of research already examining the racial inequality mortality during the pandemic. Eichenbaum [@georgia] use Georgia's data, highlighting that the counties with the most significant income inequality experienced a significantly higher death rate than more affluent counties. Besides, despite Black patients being more likely to undergo testing, they were less likely to receive treatment than White counterparts. Additionally, Abedi et al. [@vida] used data from the seven most influenced states, finding that poorer and less educated counties generally report more deaths. Their research also mentions the higher mortality rate among Black Americans.
+
+While these studies underscored the higher mortality for Black people, their research may overlook the pre-existing higher mortality rates among Black. Only examining the mortality during the pandemic is insufficient. According to the report from "White House" [@whitehouse], health insurance plays a vital role in reducing the excess deaths. This paper will explore how racial disparities in mortality rates have evolved with COVID-19 by considering health insurance, average household income and high education attainment. The null hypothesis is that there is NO change in racial mortality inequality during the pandemic.
+
+# Data
+
+The data used in this paper comprises nine data sets from three data sources, spanning both state and county levels. The socio-economic data is sourced from the American Community Survey (ACS) [@acs] containing the social, economic and insurance characteristics. Pre-pandemic mortality data are extracted from the 2019 CDC WONDER [@wonder], available for both state and county levels. While county-level mortality data during the pandemic also originates from CDC WONDER, state-level data is sourced from the CDC "Health Disparities" database [@cdc2] as it is more comprehensive.
+
+However, the data has limitation. The CDC WONDER suppressed the data if the number is less than 10 [@wonder]. To mitigate the data loss and avoid inaccurate predictions, Tiwari  [@suppression] suggested that multiplying the corresponding population of suppressed cells by the average regional mortality rate can reduce the bias, and CDC WONDER recognizes this way. Therefore, for suppressed values, I calculate the average mortality rate within the same state and multiply it by the corresponding population. The @tbl-description describes all the crucial variables.
+
+```{r}
+#| echo: false
+#| message: false
+#| tbl-cap: The descriptions of important variables
+#| label: tbl-description
+#| fig-pos: "H"
+
+data.frame(var = c("Race", "High-Education Attainment", "Income Levels", 
+                   "Uninsuranced Level", "Mortality Change"),
+           source = c("ACS", "ACS", "ACS",
+                    "ACS", "CDC WONDER"),
+           description = c("The race group which are White, Black or African American",
+                           "The proportion of residence for each race that has a at least bachelor degree.", 
+                           "The mean household income, categorized by deciles for states and percentiles for counties.",
+                           "The proportion of White and Black people that do not have health insurance for each state and county.",
+                           "The change of mortality rate during and before the pandemic per 100K for each race in every state and county.")) %>% 
+  rename(`Variables` = var,
+         `Data Source` = source,
+         `Descriptions` = description) %>% 
+  kable(booktabs = TRUE) %>% 
+  column_spec(1, width = "3cm") %>% 
+  column_spec(2, width = "3.3cm") %>% 
+  column_spec(3, width = "8.3cm")
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| tbl-cap: The summary statistics of change of mortality by 100K for each race
+#| label: tbl-mortrate_change
+#| fig-pos: "H"
+
+county_data %>%
+  group_by(race) %>%
+  summarise(
+    min = min(mortrate_change, na.rm = TRUE),
+    q1 = quantile(mortrate_change, probs = 0.25, na.rm = TRUE),
+    median = median(mortrate_change, na.rm = TRUE),
+    mean = mean(mortrate_change, na.rm = TRUE),
+    q3 = quantile(mortrate_change, probs = 0.75, na.rm = TRUE),
+    max = max(mortrate_change, na.rm = TRUE)) %>%
+  rename(`Race` = race,
+         `Minimum` = min,
+         `Q1` = q1,
+         `Median` = median,
+         `Mean` = mean,
+         `Q3` = q3,
+         `Maximum ` = max) %>%
+  kable(booktabs = TRUE, digits = 0) %>% 
+  column_spec(1, width = "3.5cm")
+```
+
+@tbl-mortrate_change summarizes the change of mortality per 100K for each race. Even though the minimum changes are negative, the maximum difference for Black people is about 70 thousand. However, such dramatic change is not widespread, as the average change hovers around 700. The occurrence of dramatic increase for the Black population is super low population. I will discuss this in the limitation.
+
+```{r}
+#| echo: false
+#| message: false
+get_state_abbreviation <- function(state_names) {
+  sapply(state_names, function(state_name) {
+    state_data <- state.abb[match(state_name, state.name)]
+    if (!is.na(state_data)) {
+      return(state_data)
+    } else {
+      return(NA)  # changed from NULL to NA for consistency in a vector
+    }
+  })
+}
+
+county <- map_data("county")
+state <- map_data("state")
+county_clean <- county %>% 
+  mutate(state = region,
+         county = subregion,
+         state = get_state_abbreviation(toTitleCase(state)),
+         county = toTitleCase(county)) %>% 
+  filter(region != "AK" & region != "HI") %>% 
+  dplyr::select(-region, -subregion)
+white_data <- county_data %>% filter(race == "White")
+black_data <- county_data %>% filter(race == "Black or African American")
+merged_white_data <- county_clean %>% 
+  # Better to use FIPS. Names do not match. St Clair and St.Clair
+  full_join(white_data, by = c("state", "county"))
+merged_black_data <- county_clean %>% 
+  full_join(black_data, by = c("state", "county"))
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| fig.width: 10
+#| fig.height: 10
+#| fig-cap: The change of mortality rate per 100K for White and Black people
+#| label: fig-map-mortality
+#| fig-pos: "H"
+p1 <- ggplot(data = merged_white_data, aes(x = long, y = lat, group = group)) + 
+  geom_polygon(aes(fill = mortrate_change), color = "black") +
+  scale_fill_gradient(low = "white", high = "darkblue", na.value = "grey",
+                      limits = c(0, 3000), oob = scales::squish) +
+  labs(title = "The change of mortality per 100k for White people",
+       fill = 'Change of Mortality per 100k') +
+  coord_quickmap() +
+  theme_void() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_path(data = state, aes(x = long, y = lat, group = group), color = "black", linewidth = 0.95)
+
+# Second plot
+p2 <- ggplot(data = merged_black_data, aes(x = long, y = lat, group = group)) + 
+  geom_polygon(aes(fill = mortrate_change), color = "black") +
+  scale_fill_gradient(low = "white", high = "darkblue", na.value = "grey",
+                      limits = c(0, 4000), oob = scales::squish) +
+  labs(title = "The change of mortality per 100k for Black people",
+       fill = 'Change of Mortality per 100k') +
+  coord_quickmap() +
+  theme_void() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_path(data = state, aes(x = long, y = lat, group = group), color = "black", linewidth = 0.95)
+
+# Arrange the plots in a 2x1 layout
+grid.arrange(p1, p2, ncol = 1)
+```
+
+@fig-map-mortality shows the change in mortality for each race on maps. From the graph, we can observe that most counties have a change of mortality for White people between 500 and 1500. However, Black people may have a change of mortality of 4,000 or even higher. This suggests the exacerbation of racial inequalities during the pandemic.
+
+```{r}
+#| echo: false
+#| message: false
+#| fig.width: 10
+#| fig.height: 10
+#| fig-cap: The distribution of percentage of White and Black people without health insurance
+#| label: fig-map-insurance
+#| fig-pos: "H"
+
+p3 <- ggplot(data = merged_white_data, aes(x = long, y = lat, group = group)) + 
+  geom_polygon(aes(fill = percent_uninsured), color = "black") +
+  scale_fill_gradient(low = "white", high = "darkblue", na.value = "grey",
+                      limits = c(0, 100), oob = scales::squish) +
+  labs(title = "The Percentage of White People Without Insurance",
+       fill = "Percent of people without insurance (%)") +
+  coord_quickmap() +
+  theme_void() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_path(data = state, aes(x = long, y = lat, group = group), color = "black", linewidth = 0.95)
+
+# Second plot
+p4 <- ggplot(data = merged_black_data, aes(x = long, y = lat, group = group)) + 
+  geom_polygon(aes(fill = percent_uninsured), color = "black") +
+  scale_fill_gradient(low = "white", high = "darkblue", na.value = "grey",
+                      limits = c(0, 100), oob = scales::squish) +
+  labs(title = "The Percentage of Black People Without Insurance",
+       fill = "Percent of people without insurance (%)") +
+  coord_quickmap() +
+  theme_void() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_path(data = state, aes(x = long, y = lat, group = group), color = "black", linewidth = 0.95)
+
+# Arrange the plots in a 2x1 layout
+grid.arrange(p3, p4, ncol = 1)
+```
+
+In addition to @fig-map-mortality, @fig-map-insurance shows the proportion of White and Black people without health insurance. Similarly, we can still see that the Black people living at some counties that have relatively low insurance coverage for Black people, highlighting the occurrence of racial inequality as well. 
+
+# Methods
+
+In this paper, the primary methodology will be the Ordinary Least Squares (OLS) regression with slight differences depending on the geographical level. The dependent variable in both models is the change in mortality rate observed during and before the pandemic. The independent variables include two key socio-economic indicators: the mean household income levels and the proportion of residents with at least a bachelor's degree in each county. Additionally, the models incorporate the ratio of uninsured White and Black individuals in each county.
+
+The difference between the models for state and county levels is the usage of predictors. Due to data limitation for county-level data, the age will only be considered in the model for the state but for county one. That said, I will examine the correlation between change in mortality to income and age at the state level. In contrast, due to the relatively small number of data points at the state level, it may not accurately capture the correlation of health insurance. Therefore, only the county-level model incorporates health insurance data. For simplicity, the state-level analysis will only use visualizations to depict inequality changes across age groups, while the county-level model will be detailed visually, using binscatter plots and through an explicit written equation.
+
+The assumption I will take is that the relation between the dependent and independent variables are both linear. However, multi-linearity could be one limitation if we do not check beforehand. Besides, excluding age as a variable in the county-level model could be a limitation. The inability to account for age-related influences might be less convincing. I will discuss in the limitations.
+
+# Results
+
+## The mortality inequality in state level
+
+```{r}
+#| echo: false
+#| message: false
+#| fig-width: 8
+#| fig-height: 5
+#| fig-cap: The change of mortality rate by income, race and age groups at the state level
+#| label: fig-state-income
+#| fig-pos: "H"
+state_data <- read.csv("merged_data_state.csv")
+data_processed <- state_data %>%
+  mutate(age_group = ifelse(age_group %in% c("1-4 years", "5-14 years"), 
+                            "1-14 years", age_group),
+         age_group = ifelse(age_group %in% c("15-24 years", "25-34 years"), 
+                            "15-34 years", age_group)) %>% 
+  group_by(age_group, race, income_decile) %>%
+  summarise(avgmortchange = mean(mortrate_change), .groups = "drop")
+
+ggplot(data_processed, aes(x = income_decile, y = avgmortchange, color = race)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~age_group) +
+  theme_minimal() +
+  theme(legend.position = "bottom") + 
+  labs(x = "Income Deciles",
+       y = "Mortality Rate Change per 100k",
+       color = "Race")
+```
+
+@fig-state-income shows the mortality rate change during and before COVID-19 across different income levels for each age group. Red represents Black or African American, while blue represents the White people. For the young children (aged below 14), we can see that the two horizontal lines almost coincide and have a value of mortality change near zero. This indicates that the racial inequality of mortality for infants and young children does not change significantly, and income variations do not substantially affect mortality for each race. However, starting at the age of 15, even though the two lines are still relatively close, the slopes are starting to be negative, indicating the presence of mortality inequalities related to income within each race.
+
+The patterns are more pronounced in age groups 65 and above. The differences in mortality change for the two races at the lowest income levels increase, and the slopes for both races become more negative. This suggests that both racial disparities and within-race income-related disparities in mortality rates are more marked among older individuals. The gap between the two lines is maximized for those aged 85 or above. This observation implies an escalation in racial mortality disparities, coupled with amplified disparities between poorer and wealthier individuals within each racial group for the oldest age group.
+
+```{r}
+#| echo: false
+#| message: false
+#| fig-width: 8
+#| fig-height: 5
+#| fig-cap: The change of mortality rate by high-education attainment, race and age groups in the state level
+#| label: fig-state-education
+#| fig-pos: "H"
+data_processed <- state_data %>%
+  mutate(age_group = ifelse(age_group %in% c("1-4 years", "5-14 years"), 
+                            "1-14 years", age_group),
+         age_group = ifelse(age_group %in% c("15-24 years", "25-34 years"), 
+                            "15-34 years", age_group)) %>% 
+  group_by(age_group, race, education_decile) %>%
+  summarise(avgmortchange = mean(mortrate_change), .groups = "drop")
+
+ggplot(data_processed, aes(x = education_decile, y = avgmortchange, color = race)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~age_group) +
+  theme_minimal() +
+  theme(legend.position = "bottom") + 
+  labs(x = "High-education attainment deciles",
+       y = "Mortality Rate Change per 100k",
+       color = "Race")
+```
+
+Compared to @fig-state-income, @fig-state-education shows the change in mortality rate regarding the high-education attainment. The two graphs show a similar paattern between the two graphs, indicating that states with higher income levels also tend to have higher educational levels. Therefore, to avoid potential collinearity and increase the accuracy, I will only incorporate income in the model for counties.
+
+## The mortality inequality in county-level
+
+The county-level OLS regression model is:
+
+```{=tex}
+\begin{align*}
+\text{Change of Mortality} &=  805.991 + \\
+& - 538.681 \times \text{White} \\
+& - 3.153 \times \text{Income Percentile} \\
+& + 8.032 \times \text{Uninsured Percentage} \\
+& + 1.49 \times \text{White:Income Percentile} \\
+& + 4.505 \times \text{White:Uninsured Percentage}
+\end{align*}
+```
+
+The above equation shows the OLS regression model based on the county-level data. The meaning of each variable is revealed in the table @tbl-description. From the equation, 805.991 denotes the mortality change for Black people living in the poorest counties where no one has health insurance. Regarding racial differences, White people seem to have about 540 fewer deaths during the COVID than Black people, no matter how the income and insurance levels change. The model also indicates that for both racial groups, there is an expected decrease of about 3.1 deaths for every unit increase in the mean household income percentile. Conversely, eveery unit increase in the proportion of uninsured individuals in each racial group will have about eight more deaths during the pandemic, holding other factors constant.
+
+In terms of interaction terms, with every unit increase in the income percent, there will be 1.49 more deaths for White people than Black. Similarly, holding other factors constant, one unit increase in the percentage of people without insurance will have about five more deaths for White compared to Black people. However, from @tbl-model, interaction terms may not be significant. We can verify this from @fig-state-income, where only older age groups show a pronounced interaction effect between mortality change and income.
+
+```{r}
+#| echo: false
+#| message: false
+#| tbl-cap: The summary statistics of the regression model
+#| label: tbl-model
+#| fig-pos: "H"
+model <- lm(mortrate_change ~ race*income_pctile + race*percent_uninsured, data = county_data)
+tidy_model <- tidy(model)
+
+# Function to add stars based on p-values
+add_stars <- function(p) {
+  if (p < 0.001) return("(***)")
+  if (p < 0.01) return("(**)")
+  if (p < 0.05) return("(*)")
+  if (p < 0.1) return(".")
+  return("")
+}
+# Add stars to estimates
+tidy_model$Estimate_with_stars <- paste0(round(tidy_model$estimate, 3), sapply(tidy_model$p.value, add_stars))
+
+# Named vector of new labels
+new_labels <- c(
+  "(Intercept)" = "Intercept",
+  "raceWhite" = "White",
+  "income_pctile" = "Income Percentile",
+  "percent_uninsured" = "Uninsured Percentage",
+  "raceWhite:income_pctile" = "White:Income Percentile",
+  "raceWhite:percent_uninsured" = "White:Uninsured Percentage")
+
+# Update the term column with new labels
+tidy_model$term <- new_labels[tidy_model$term]
+
+# Rename columns and select the ones we want
+tidy_model <- tidy_model %>%
+  rename(
+    `Predictor` = term,
+    `Estimates` = Estimate_with_stars,
+    `Standard Error` = std.error,
+    `t value` = statistic,
+    `p value` = p.value
+  ) %>%
+  dplyr::select(Predictor, Estimates, `Standard Error`, `t value`, `p value`)
+
+# Create a table using kable() and style it with kableExtra
+kable(tidy_model, digits = 3, booktabs = TRUE) %>%
+  footnote(general = "Signif. codes: 0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1")
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| include: false
+library(binsreg)
+county_data$race <- as.factor(county_data$race)
+implement_binscatter <- function(data, y_var, x_var, by_var = "race", w_var = NULL, nbins = 10) {
+  if (!is.null(w_var)) {
+    graph <- binsreg(y = data[[y_var]], 
+                     x = data[[x_var]], 
+                     w = data[[w_var]], 
+                     by = data[[by_var]], 
+                     nbins = nbins)
+  } 
+  else {
+    graph <- binsreg(y = data[[y_var]], 
+                     x = data[[x_var]], 
+                     by = data[[by_var]], 
+                     nbins = nbins)
+  }
+  return(graph)
+}
+graph1 <- implement_binscatter(county_data, "mortrate_change", "income_pctile", 
+                               w_var = "percent_uninsured")
+graph2 <- implement_binscatter(county_data, "mortrate_change", "income_pctile")
+graph3 <- implement_binscatter(county_data, "mortrate_change", "percent_uninsured", 
+                               w_var = "income_pctile")
+graph4 <- implement_binscatter(county_data, "mortrate_change", "percent_uninsured")
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 5
+#| fig-cap: The correlation between the change of mortality rate for White and Black to the income and insurance with and without controls
+#| label: fig-binscatter
+#| fig-pos: "H"
+
+plot_binscatter <- function(graph, title, xlab, ylab) {
+  data_black <- graph$data.plot$`Group Black or African American`$data.dots
+  data_white <- graph$data.plot$`Group White`$data.dots
+  combined_data <- rbind(data_black, data_white)
+  plot <- ggplot(combined_data, aes(x = x, y = fit, color = group)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(title = title, x = xlab, y = ylab, color = "Race") +
+    theme_minimal() +
+    theme(legend.position = "none") +
+    scale_y_continuous(limits = c(150, 1250))
+  return(plot)
+}
+plot1 <- plot_binscatter(graph1, "Income with Controlling Insurance",
+                         "Income Percentile", "Mortality Change")
+plot2 <- plot_binscatter(graph2, "Income without Controlling Insurance",
+                         "Income Percentile", "Mortality Change")
+plot3 <- plot_binscatter(graph3, "Insurance with Controlling Income",
+                         "Uninsured Percentage", "Mortality Change")
+plot4 <- plot_binscatter(graph4, "Insurance without Controlling Income",
+                         "Uninsured Percentage", "Mortality Change")
+library(cowplot)
+legend <- get_legend(plot1 + theme(legend.position = "bottom"))
+combined_plot <- plot_grid(plot1, plot2, plot3, plot4, nrow = 2)
+combined_plot_with_legend <- plot_grid(combined_plot, legend, ncol = 1, rel_heights = c(1, 0.1))
+print(combined_plot_with_legend)
+```
+
+@fig-binscatter shows the binscatter for income and insurance with the mortality change. The slope matches the results from @tbl-model. Interestingly, the plot indicates that the inclusion or exclusion of other variables when predicting mortality changes based on income or insurance coverage does not significantly alter the outcomes. This suggests a strong independence between the two variables, meaning that lower-income counties do not necessarily have higher or lower rates of uninsured individuals. Consequently, the accuracy of prediction also increases.
+
+
+
+# Discussion
+
+## The racial mortality inequality interplays with socioeconomic factors, varying with different age groups
+
+@fig-state-income and @fig-state-education shows insights into mortality inequality in terms of both race and income. Mathematically, the intercept of each line represents the racial mortality inequality, whereas the slope denotes the inequality by income within each race. Based on that, we can divide the age groups into three groups.
+
+For infants and young children under 14, it shows uniformity in mortality changes across different races and income or education levels. The intercepts and slopes are similar for all racial groups, suggesting that at this young age, mortality rates are not significantly influenced by either race or socioeconomic factors. However, the slope changes for people aged between 15 and 65, but intercepts are still approximately the same. This suggests income imposes a greater influence on mortality rates. For the three oldest population groups. The graphs show distinct differences in both intercepts and slopes among different racial groups, indicating that mortality rates are influenced by an interplay of race and income.
+
+Therefore, it is clear that mortality disparities are not solely distributed by either racial or socioeconomic factors but are instead a result of their combined effects.
+
+## Health insurance has an enormous impact on income, especially for Black people. 
+
+@tbl-model and @fig-binscatter point out the impact of health insurance coverage on mortality rates during the pandemic. The lives lost by having one more percent of people uninsured are higher than the increase in the income level by one unit. Furthermore, the data reveals a notable disparity in insurance coverage between races, with at most 45% Black individuals without insurance (20 for White). This disparity suggests that differences in health insurance coverage could be a key factor contributing to racial inequalities in mortality rates during pandemic.
+
+One potential explanation for this disparity might be the differing spending priorities among racial groups, where Blacks may spend more on jewellery and cars [@priority] and not beneficial to their health. This said, simply providing direct financial assistance (income) may not be effective to address these disparities. Instead, ensuring access to health insurance could be a more impactful approach. More Black people will receive medical treatment and decrease mortality, especially during the pandemic.
+
+# Conclusion
+In this paper, there are two crucial conclusions. Firstly, racial mortality inequality may interplay with socioeconomic factors such as income, emphasizing that solely focusing on racial aspects does not provide a complete picture of mortality disparities. In addition, the role of health insurance is more crucial than income and underscores the importance of health insurance, especially for Black people. Therefore, the null hypothesis is wrong; racial inequality exists during the pandemic.
+
+However, the most significant limitation is the data constraints. There is no data available on racial mortality in age groups, and hence, we can not fully understand how health insurance impacts different age groups and races. Additionally, suppressing specific mortality values may result in inaccuracies even though I manually calculated them. Furthermore, the model used may be too simple and can not capture more variations of change in mortality. All these limitations will make the final results less convincing and comprehensive. Future studies should employ more sophisticated models to capture the variations.
+
+\newpage
+
+
+# References
+
+
+
+
