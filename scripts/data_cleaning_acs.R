@@ -1,5 +1,5 @@
 # This is the file to clean all the ACS data
-source("scripts/import_data.R")
+source("codes/import_data.R")
 
 
 # Import all the packages
