@@ -1,10 +1,10 @@
-# Starter folder
+# Accessing Racial Mortality Rate Changes During and Before Pandemic: The Interplay of Racial Inequality with Income and The Essential Role of Health Insurance
 
 ## Overview
 
-This repo provides students with a foundation for their own projects associated with *Telling Stories with Data*. You do not need every aspect for every paper and you should delete aspects that you do not need.
+This paper used nine data sets from three difference sources. Specifically, we used five data sets regarding the socio-economic factors from American Community Survey (ACS) and death data from both before and during the pandemic from CDC WONDER. This paper compares the mortality rate for both White and Black before and during the pandemic, to see how the mortality inequality changed due to pandemic. This paper also investigated the relations between socio-economic factors such as income and health insurance coverage, to the change of inequality.
 
-To use this folder, click the green "Code" button", then "Download ZIP". Move the downloaded folder to where you want to work on your own computer, and then modify it to suit.
+All the ACS data are extracted using API but the mortality data are downloaded directly from the website of CDC WONDER. All the inputs data are stored at `inputs/data`. The output paper is in `outputs/paper/paper.pdf`.
 
 ## File Structure
 
