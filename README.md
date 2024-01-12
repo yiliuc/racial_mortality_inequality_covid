@@ -1,4 +1,4 @@
-# Accessing Racial Mortality Rate Changes During and Before Pandemic: The Interplay of Racial Inequality with Income and The Essential Role of Health Insurance
+# Accessing Racial Mortality Rate Changes During and Before Pandemic: The Interplay of Racial Inequality with Income and The Essential Role of Health Insurance (ECO481)
 
 ## Overview
 
